@@ -40,7 +40,7 @@ Technical Details:
 Note: This module is specifically designed for Odoo 18 Community Edition.
     """,
     'author': 'lumpuy@hotmail.com',
-    'website': 'https://github.com/lumpuy/single_session_per_user',
+    'website': 'https://www.linkedin.com/in/luis-francisco-rojas-lumpuy-601b0413b/',
     'support': 'lumpuy@hotmail.com',
     'depends': ['base', 'web'],
     'data': [
@@ -51,7 +51,7 @@ Note: This module is specifically designed for Odoo 18 Community Edition.
     'installable': True,
     'application': False,
     'auto_install': False,
-    'price': 35.00,
+    'price': 10.00,
     'currency': 'USD',
     'license': 'OPL-1',
     'external_dependencies': {
