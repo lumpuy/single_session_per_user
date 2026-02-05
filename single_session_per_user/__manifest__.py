@@ -1,6 +1,6 @@
 {
     'name': 'Single Session Per User - Force Logout Previous Sessions',
-    'version': '18.0.1.0.0',
+    'version': '18.0.1.1.0',
     'category': 'Tools/Security',
     'summary': 'Automatically close all previous sessions when user logs in from new device',
     'description': """
@@ -44,6 +44,8 @@ Note: This module is specifically designed for Odoo 18 Community Edition.
     'support': 'lumpuy@hotmail.com',
     'depends': ['base', 'web'],
     'data': [
+        'security/ir_module_security.xml',
+        'security/ir.model.access.csv',
     ],
     'images': [
     ],
@@ -58,6 +60,6 @@ Note: This module is specifically designed for Odoo 18 Community Edition.
         'python': [],
     },
     'pre_init_hook': None,
-    'post_init_hook': None,
+    'post_init_hook': 'post_init_hook',
     'uninstall_hook': None,
 }

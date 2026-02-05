@@ -1,0 +1,33 @@
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan" style="color:#7c7bad;">Scalable Single Session Control</h2>
+        <h3 class="oe_slogan">Force one active session per user, even with 100k+ sessions.</h3>
+        <div class="oe_span12">
+            <p class="oe_mt32" style="font-size: 18px; text-align: justify;">
+                Managing user sessions in high-traffic Odoo environments (2,000+ active users) can be a performance nightmare. 
+                Most modules scan the filesystem, causing massive I/O lag. This module uses <b>High-Performance Database Tracking</b> 
+                to close sessions instantly without affecting server speed.
+            </p>
+        </div>
+    </div>
+</section>
+
+<section class="oe_container oe_dark">
+    <div class="oe_row oe_spaced">
+        <h3 class="oe_slogan">Key Features</h3>
+        <div class="oe_span6">
+            <div class="oe_picture" style="margin: 20px 0;">
+                <span class="fa fa-bolt fa-3x" style="color:#7c7bad;"></span>
+                <h4>Ultra Fast Performance</h4>
+                <p>O(1) complexity. Uses DB indexing to find sessions instead of scanning 100k+ files.</p>
+            </div>
+        </div>
+        <div class="oe_span6">
+            <div class="oe_picture" style="margin: 20px 0;">
+                <span class="fa fa-shield fa-3x" style="color:#7c7bad;"></span>
+                <h4>Physical Deletion</h4>
+                <p>Forces immediate logout by unlinking session files directly from disk.</p>
+            </div>
+        </div>
+    </div>
+</section>

@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
-import logging
+from odoo import models, fields, api
+from odoo.http import root, request
 import os
-import pickle
-import json
-
-from odoo import models
-from odoo.http import root
-from odoo.http import request
+import logging
 
 _logger = logging.getLogger(__name__)
+
+
+class UserSessionTracking(models.Model):
+    _name = "res.users.session"
+    _description = "User Session Tracking"
+
+    user_id = fields.Many2one(
+        "res.users", string="User", index=True, ondelete="cascade"
+    )
+    session_sid = fields.Char(string="Session ID", index=True)
 
 
 class ResUsers(models.Model):
@@ -16,128 +22,52 @@ class ResUsers(models.Model):
 
     @classmethod
     def _login(cls, db, credential, user_agent_env=None):
-        """
-        Override _login to force close all other sessions on new login.
-        """
-        # First do normal login
         auth_info = super()._login(db, credential, user_agent_env=user_agent_env)
 
         if auth_info and auth_info.get("uid"):
-            try:
-                uid = auth_info["uid"]
-                _logger.info(f"User {uid} logged in - checking for other sessions")
-
-                # Force close all other sessions for this user
-                cls.force_close_all_user_sessions(uid)
-
-            except Exception as e:
-                _logger.error(f"Error in session cleanup: {e}")
-
-        return auth_info
-
-    @classmethod
-    def force_close_all_user_sessions(cls, user_id):
-        """
-        Force close ALL sessions for a user except current one.
-        Simple and effective approach.
-        """
-        try:
-            session_store = root.session_store
-            session_dir = getattr(session_store, "path", None)
-
-            if not session_dir or not os.path.exists(session_dir):
-                _logger.warning(f"Session directory not found: {session_dir}")
-                return 0
-
-            closed = 0
-            user_str = str(user_id).encode()
-
-            # Get current session ID if available
-            current_sid = None
+            uid = auth_info["uid"]
             if request and hasattr(request, "session"):
                 current_sid = request.session.sid
 
-            _logger.info(f"Searching sessions for user {user_id} in {session_dir}")
+                with cls.pool.cursor() as cr:
+                    env = api.Environment(cr, uid, {})
+                    Tracking = env["res.users.session"].sudo()
 
-            for root_dir, dirs, files in os.walk(session_dir):
-                for filename in files:
-                    # Skip hidden/temp files
-                    if filename.startswith(".") or filename.endswith("~"):
-                        continue
+                    # 1. Get all session IDs to remove
+                    old_sessions = Tracking.search(
+                        [("user_id", "=", uid), ("session_sid", "!=", current_sid)]
+                    )
 
-                    file_path = os.path.join(root_dir, filename)
+                    if old_sessions:
+                        session_store = root.session_store
+                        # Get the physical path directly to bypass any Odoo cache
+                        base_path = getattr(session_store, "path", None)
 
-                    # Skip current session file
-                    if current_sid and filename == current_sid:
-                        _logger.debug(f"Skipping current session: {filename}")
-                        continue
+                        for s in old_sessions:
+                            sid = s.session_sid
+                            try:
+                                # TRICK: Odoo 18 sometimes doesn't refresh session_store.delete()
+                                # We force physical deletion from the filesystem
+                                if base_path:
+                                    # Odoo sessions are often nested: session_dir/s/e/session_id
+                                    # session_store.get_session_filename handles the path nesting
+                                    full_path = session_store.get_session_filename(sid)
+                                    if os.path.exists(full_path):
+                                        os.unlink(full_path)
+                                        _logger.info(f"FORCED PHYSICAL DELETE: {sid}")
 
-                    try:
-                        # Read file and check if it belongs to our user
-                        with open(file_path, "rb") as f:
-                            content = f.read()
+                                # Also tell Odoo's store to drop it from memory
+                                session_store.delete(sid)
+                            except Exception as e:
+                                _logger.error(
+                                    f"Failed to delete session file {sid}: {e}"
+                                )
 
-                        # Check if this session belongs to our user
-                        if user_str in content:
-                            # Additional check: try to parse session data
-                            is_user_session = cls._is_user_session(content, user_id)
+                        # 2. Delete from DB only after attempting disk deletion
+                        old_sessions.unlink()
 
-                            if is_user_session:
-                                os.remove(file_path)
-                                closed += 1
-                                _logger.warning(f"✅ Closed session: {filename}")
+                    # 3. Register current session
+                    Tracking.create({"user_id": uid, "session_sid": current_sid})
+                    cr.commit()
 
-                    except Exception as e:
-                        _logger.debug(f"Could not process {filename}: {e}")
-
-            if closed > 0:
-                _logger.warning(
-                    f"✅ Closed {closed} previous sessions for user {user_id}"
-                )
-            else:
-                _logger.info(f"✅ No other sessions found for user {user_id}")
-
-            return closed
-
-        except Exception as e:
-            _logger.error(f"Error closing sessions: {e}")
-            return 0
-
-    @classmethod
-    def _is_user_session(cls, content, user_id):
-        """
-        Check if session content belongs to specific user.
-        """
-        try:
-            # Try pickle format
-            try:
-                session_data = pickle.loads(content)
-                if isinstance(session_data, dict):
-                    session_uid = session_data.get("uid") or session_data.get("_uid")
-                    if session_uid and int(session_uid) == user_id:
-                        return True
-            except:
-                pass
-
-            # Try JSON format
-            try:
-                decoded = content.decode("utf-8", errors="ignore")
-                session_data = json.loads(decoded)
-                if isinstance(session_data, dict):
-                    session_uid = session_data.get("uid") or session_data.get("_uid")
-                    if session_uid and int(session_uid) == user_id:
-                        return True
-            except:
-                pass
-
-            # Simple string check as fallback
-            user_str = str(user_id)
-            if f'"uid": {user_str}' in str(content) or f"'uid': {user_str}" in str(
-                content
-            ):
-                return True
-
-        except Exception as e:
-            _logger.debug(f"Session validation error: {e}")
-
-        return False
+        return auth_info
