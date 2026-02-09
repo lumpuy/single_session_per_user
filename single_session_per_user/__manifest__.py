@@ -47,8 +47,7 @@ Note: This module is specifically designed for Odoo 18 Community Edition.
         'security/ir_module_security.xml',
         'security/ir.model.access.csv',
     ],
-    'images': [
-    ],
+    "images": ["static/description/background.png", ],
     'demo': [],
     'installable': True,
     'application': False,
