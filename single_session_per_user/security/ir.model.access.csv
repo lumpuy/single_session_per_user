@@ -1,2 +1,4 @@
 id,name,model_id/id,group_id/id,perm_read,perm_write,perm_create,perm_unlink
-access_res_users_session_user,res.users.session,model_res_users_session,base.group_user,1,1,1,1
+access_res_users_session_user,custom.res.users.session user,model_res_users_session,base.group_user,1,1,1,1
+access_res_users_session_portal,custom.res.users.session portal,model_res_users_session,base.group_portal,1,1,1,1
+access_res_users_session_manager,custom.res.users.session manager,model_res_users_session,base.group_system,1,1,1,1
