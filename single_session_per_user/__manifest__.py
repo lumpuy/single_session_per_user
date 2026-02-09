@@ -1,6 +1,6 @@
 {
     'name': 'Single Session Per User - Force Logout Previous Sessions',
-    'version': '18.0.1.1.0',
+    'version': '18.0.1.0.1',
     'category': 'Tools/Security',
     'summary': 'Automatically close all previous sessions when user logs in from new device',
     'description': """

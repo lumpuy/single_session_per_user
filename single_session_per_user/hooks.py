@@ -1,97 +1,144 @@
-# -*- coding: utf-8 -*-
+# hooks.py
+import re
 import os
 import pickle
-import logging
 import json
-from odoo import api, tools
+import logging
+from odoo import tools
+from odoo.http import root
 
 _logger = logging.getLogger(__name__)
 
 
 def post_init_hook(env):
-    """
-    Improved migration hook for Odoo 18.
-    Handles both Pickle and JSON session formats.
-    """
-    from odoo.http import root
-    from psycopg2.extras import execute_values
-
+    """Load existing sessions when installing"""
     cr = env.cr
+
+    # Get session directory
     session_store = root.session_store
-
-    # Strategy 1: Get path from session_store
-    session_dir = getattr(session_store, "path", None)
-
-    # Strategy 2: Fallback to Odoo standard data dir if Strategy 1 fails
-    if not session_dir or not os.path.exists(session_dir):
-        session_dir = os.path.join(tools.config["data_dir"], "sessions")
-
-    _logger.info("Checking session directory: %s", session_dir)
+    session_dir = getattr(session_store, 'path', '')
 
     if not session_dir or not os.path.exists(session_dir):
-        _logger.error("CRITICAL: Session directory NOT FOUND at %s", session_dir)
+        session_dir = os.path.join(tools.config['data_dir'], 'sessions')
+
+    if not os.path.exists(session_dir):
+        _logger.warning(f"⚠️ [HOOK] Session directory not found: {session_dir}")
         return
 
-    session_data_list = []
+    _logger.info(f"🔍 [HOOK] Searching for sessions in: {session_dir}")
+
     processed = 0
     errors = 0
 
-    _logger.info("Starting disk scan...")
-
+    # Use os.walk to search all subdirectories
     for root_dir, dirs, files in os.walk(session_dir):
+        _logger.debug(f"🔍 [HOOK] Examining directory: {root_dir}")
+
         for filename in files:
-            # Basic Odoo session file validation
-            if filename.startswith(".") or len(filename) < 10:
+            # Skip temporary/hidden files
+            if filename.startswith('.') or filename.endswith('~'):
+                continue
+
+            # Odoo session files usually have long names
+            if len(filename) < 20:
+                _logger.debug(f"🔍 [HOOK] Skipping short file: {filename}")
                 continue
 
             file_path = os.path.join(root_dir, filename)
             uid = None
 
             try:
-                with open(file_path, "rb") as f:
+                _logger.debug(f"🔍 [HOOK] Processing file: {filename}")
+
+                with open(file_path, 'rb') as f:
                     content = f.read()
+
                     if not content:
+                        _logger.debug(f"🔍 [HOOK] Empty file: {filename}")
                         continue
 
-                    # Try Pickle (Traditional Odoo)
+                    _logger.debug(f"🔍 [HOOK] File size: {len(content)} bytes")
+
+                    # Try Pickle first (Odoo's standard format)
                     try:
                         data = pickle.loads(content)
-                        uid = data.get("uid")
-                    except:
-                        # Try JSON (Modern/Modified Odoo)
+                        uid = data.get('uid') or data.get('_uid')
+                        _logger.debug(f"🔍 [HOOK] Pickle successful - UID: {uid}")
+                    except Exception as pickle_error:
+                        _logger.debug(f"🔍 [HOOK] Pickle failed: {pickle_error}")
+
+                        # Try JSON
                         try:
-                            data = json.loads(content.decode("utf-8"))
-                            uid = data.get("uid")
-                        except:
-                            pass
+                            decoded = content.decode('utf-8', errors='ignore')
+                            data = json.loads(decoded)
+                            uid = data.get('uid') or data.get('_uid')
+                            _logger.debug(f"🔍 [HOOK] JSON successful - UID: {uid}")
+                        except Exception as json_error:
+                            _logger.debug(f"🔍 [HOOK] JSON failed: {json_error}")
+
+                            # Direct search in bytes/string
+                            try:
+                                # Look for common patterns
+                                content_str = content.decode('utf-8', errors='ignore')
+
+                                # Pattern: "uid": 2
+                                matches = re.findall(r'"uid"\s*:\s*(\d+)', content_str)
+                                if matches:
+                                    uid = int(matches[0])
+                                    _logger.debug(f"🔍 [HOOK] Regex found UID: {uid}")
+                                else:
+                                    # Alternative pattern: 'uid': 2
+                                    matches = re.findall(r"'uid'\s*:\s*(\d+)", content_str)
+                                    if matches:
+                                        uid = int(matches[0])
+                                        _logger.debug(f"🔍 [HOOK] Alternative regex UID: {uid}")
+                            except Exception as regex_error:
+                                _logger.debug(f"🔍 [HOOK] Regex failed: {regex_error}")
 
                 if uid:
-                    session_data_list.append((int(uid), filename))
-                    processed += 1
+                    # Get file timestamps
+                    try:
+                        # Check if already exists
+                        cr.execute("SELECT id FROM res_users_session WHERE session_id = %s", (filename,))
+                        exists = cr.fetchone()
 
-                # Batch insert to DB
-                if len(session_data_list) >= 1000:
-                    execute_values(
-                        cr,
-                        "INSERT INTO res_users_session (user_id, session_sid) VALUES %s",
-                        session_data_list,
-                    )
-                    session_data_list = []
-                    _logger.info("Migrated %s sessions...", processed)
+                        if not exists:
+                            # Insert into table
+                            cr.execute("""
+                                INSERT INTO res_users_session
+                                (user_id, session_id, file_path)
+                                VALUES (%s, %s, %s)
+                            """, (int(uid), filename, file_path))
+
+                            processed += 1
+                            _logger.debug(f"✅ [HOOK] Session inserted: {filename} for user {uid}")
+                        else:
+                            _logger.debug(f"🔍 [HOOK] Session already exists: {filename}")
+
+                    except Exception as insert_error:
+                        errors += 1
+                        _logger.error(f"❌ [HOOK] Error inserting session {filename}: {insert_error}")
+                else:
+                    _logger.debug(f"🔍 [HOOK] Could not extract UID from: {filename}")
 
             except Exception as e:
                 errors += 1
+                _logger.error(f"❌ [HOOK] Error processing {filename}: {e}")
                 continue
 
-    # Final batch
-    if session_data_list:
-        execute_values(
-            cr,
-            "INSERT INTO res_users_session (user_id, session_sid) VALUES %s",
-            session_data_list,
-        )
+    _logger.info(f"✅ [HOOK] Loaded {processed} existing sessions, {errors} errors")
 
-    cr.commit()  # Force commit for the hook
-    _logger.info(
-        "MIGRATION FINISHED: %s sessions indexed, %s errors.", processed, errors
-    )
+    # Also create indexes if they don't exist
+    try:
+        _logger.info("🔍 [HOOK] Creating indexes...")
+        cr.execute("""
+            CREATE INDEX IF NOT EXISTS custom_session_user_id_idx
+            ON res_users_session (user_id)
+        """)
+        cr.execute("""
+            CREATE INDEX IF NOT EXISTS custom_session_session_id_idx
+            ON res_users_session (session_id)
+        """)
+        _logger.info("✅ [HOOK] Indexes created successfully")
+    except Exception as e:
+        _logger.warning(f"⚠️ [HOOK] Error creating indexes: {e}")
