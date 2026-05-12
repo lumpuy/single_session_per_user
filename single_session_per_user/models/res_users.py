@@ -5,7 +5,7 @@ from datetime import datetime
 from odoo.modules.registry import Registry
 import odoo
 from odoo import models, fields, api
-from odoo.http import GeoIP, root
+from odoo.http import GeoIP, request, root
 
 from contextlib import nullcontext
 
@@ -112,12 +112,27 @@ class ResDeviceLog(models.Model):
                 (user_id, session_id, file_path)
                 VALUES (%s, %s, %s)
             """, (user_id, full_session_id, file_path))
-            _logger.info("✅ Created custom session: %s", full_session_id[:20])
+            _logger.info("Created custom session: %s", full_session_id[:20])
         _logger.info("User %d inserts device log (%s)", user_id, session_identifier)
 
 
 class ResUsers(models.Model):
     _inherit = "res.users"
+
+    @api.model
+    def _is_excluded_from_single_session(self, uid):
+        """
+        Check if the user belongs to any group with 'exclude_single_session' active.
+        """
+        # We use a direct SQL query or sudo to ensure we can read groups during login
+        self.env.cr.execute("""
+            SELECT 1
+            FROM res_groups_users_rel r
+            JOIN res_groups g ON r.gid = g.id
+            WHERE r.uid = %s AND g.exclude_single_session = TRUE
+            LIMIT 1
+        """, (uid,))
+        return bool(self.env.cr.fetchone())
 
     @classmethod
     def _login(cls, db, credential, user_agent_env=None):
@@ -131,8 +146,20 @@ class ResUsers(models.Model):
 
         if auth_info and auth_info.get("uid"):
             uid = auth_info["uid"]
-            _logger.warning(f"🔄 User {uid} logging in - closing previous sessions")
+            _logger.warning(f"User {uid} logging in - closing previous sessions")
 
+            # New Check: Is the user excluded?
+            registry = Registry(db)
+            with registry.cursor() as cr:
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                user_model = env['res.users'].browse(uid)
+
+                # We check if any of the user's groups have the exclusion active
+                if any(group.exclude_single_session for group in user_model.groups_id):
+                    _logger.info(f"User {uid} is excluded from single session restriction via group settings.")
+                    return auth_info
+
+            # If not excluded, proceed with closing previous sessions
             try:
                 # Get all user sessions FROM THE TABLE
                 registry = Registry(db)
@@ -144,7 +171,7 @@ class ResUsers(models.Model):
                         ('user_id', '=', uid),
                     ])
 
-                    _logger.info(f"📊 Found {len(active_sessions)} active sessions in the table")
+                    _logger.info(f"Found {len(active_sessions)} active sessions in the table")
 
                     # 3. Close each session using native method
                     session_store = root.session_store
@@ -153,14 +180,14 @@ class ResUsers(models.Model):
                     for session in active_sessions:
                         try:
                             session_id = session.session_id
-                            _logger.info(f"🔒 Closing session: {session_id}")
+                            _logger.info(f"Closing session: {session_id}")
 
                             # Close with Odoo's native method
                             odoo_session = session_store.get(session_id)
                             if odoo_session:
                                 odoo_session.logout(keep_db=True)
                                 session_store.save(odoo_session)
-                                _logger.info(f"✅ Session closed in Odoo: {session_id}")
+                                _logger.info(f"Session closed in Odoo: {session_id}")
 
                             # Delete physical file if it exists
                             session_dir = getattr(session_store, 'path', None)
@@ -168,20 +195,20 @@ class ResUsers(models.Model):
                                 session_file = os.path.join(session_dir, session_id)
                                 if os.path.exists(session_file):
                                     os.remove(session_file)
-                                    _logger.info(f"🗑️ File deleted: {session_id}")
+                                    _logger.info(f"File deleted: {session_id}")
 
                             # Mark as inactive in the table
                             session.unlink()
                             closed_count += 1
 
                         except Exception as e:
-                            _logger.error(f"❌ Error closing session {session.session_id}: {e}")
+                            _logger.error(f"Error closing session {session.session_id}: {e}")
 
-                    _logger.warning(f"✅ Closed {closed_count} previous sessions for user {uid}")
+                    _logger.warning(f"Closed {closed_count} previous sessions for user {uid}")
 
                 _logger.info("=== LOGIN COMPLETED SUCCESSFULLY ===")
 
             except Exception as e:
-                _logger.error(f"❌ ERROR in session management: {e}")
+                _logger.error(f"ERROR in session management: {e}")
 
         return auth_info
